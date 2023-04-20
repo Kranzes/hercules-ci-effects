@@ -2,6 +2,7 @@
 Environment:
   - files: JSON value of type `Array<string | {path: string, label: string}>`;
     files to use for release
+  - update_prev: if present, deletes the previous release with the same tag
   - check_only: if present, do not perform release, only check that files
     exist and create $out file
   - if check_only is not present:
@@ -123,10 +124,29 @@ else:
                             check=True
                         )
                 rename("archive.zip", spec.label)
+    if "update_prev" in environ:
+        prevRelease = subprocess.run(
+            [
+                "gh", "release", "view",
+                "--repo", f"{environ['owner']}/{environ['repo']}",
+                "--json", "tagName", "--jq", ".tagName"
+            ],
+            check=True,
+            capture_output=True
+        ).stdout
+        if prevRelease == environ["releaseTag"]:
+            eprint("Deleting previous release with the same tag...")
+            execlp(
+                "gh",
+                "gh", "release", "delete",
+                "--repo", f"{environ['owner']}/{environ['repo']}",
+                prevRelease
+            )
     execlp(
         "gh",
         "gh", "release", "create",
         "--repo", f"{environ['owner']}/{environ['repo']}",
+
         environ["releaseTag"],
         *(spec.label for spec in specs)
     )

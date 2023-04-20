@@ -40,12 +40,14 @@ let
         _out = mkOption {
           readOnly = true;
           internal = true;
-          default = if options.path.isDefined
+          default =
+            if options.path.isDefined
             then
-              # Assume single, but check first
+            # Assume single, but check first
               lib.throwIf (options.paths.isDefined) "${options.path} and ${options.paths} are mutually exclusive"
-              lib.throwIf (options.archiver.isDefined) "${options.path} and ${options.archiver} are mutually exclusive"
-              { inherit (config) label path; }
+                lib.throwIf
+                (options.archiver.isDefined) "${options.path} and ${options.archiver} are mutually exclusive"
+                { inherit (config) label path; }
             else
               { inherit (config) label paths archiver; };
         };
@@ -78,6 +80,16 @@ in
           default = herculesCI: herculesCI.config.repo.tag;
           defaultText = lib.literalExpression "herculesCI: herculesCI.config.repo.tag";
         };
+
+        updatePrev = mkOption {
+          type = types.functionTo types.bool;
+          description = ''
+            Whether to update the previous release with the same tag by deleting and then recreating it.
+          '';
+          default = _: false;
+          defaultText = lib.literalExpression "_: false";
+        };
+
         files = mkOption {
           type = types.listOf fileSpec;
           description = ''
@@ -89,7 +101,7 @@ in
             
             In case of archive, `paths` may contain directories: their _contents_ will be archived recursively.
           '';
-          default = [];
+          default = [ ];
           defaultText = lib.literalExpression "[]";
           example = lib.literalExpression ''
             [
@@ -163,7 +175,7 @@ in
 
       cfg = config.hercules-ci.github-releases;
       opt = options.hercules-ci.github-releases;
-      enable = cfg.files != [] || opt.filesPerSystem.isDefined;
+      enable = cfg.files != [ ] || opt.filesPerSystem.isDefined;
     in
     {
       herculesCI = mkIf enable (herculesCI@{ config, ... }:
@@ -197,7 +209,7 @@ in
                 inherit (config.repo) owner;
                 repo = config.repo.name;
                 releaseTag = cfg.releaseTag herculesCI;
-              };
+              } // lib.optionalAttrs (cfg.updatePrev herculesCI) { update_prev = ""; };
               inputs = [ pkgs.zip ];
               extraAttributes.files = files;
             }
@@ -215,7 +227,8 @@ in
               default.outputs.checks.release-artifacts = mkIf (cfg.checkArtifacts herculesCI) (withSystem defaultEffectSystem ({ pkgs, ... }:
                 pkgs.runCommandNoCCLocal
                   "artifacts-check"
-                  { files = filesJSON;
+                  {
+                    files = filesJSON;
                     check_only = "";
                     passthru.files = files;
                   }
