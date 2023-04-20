@@ -1,6 +1,7 @@
 { config, lib, options, withSystem, ... }:
 let
-  inherit (lib) mkOption mkOptionType types;
+  inherit (lib) mkOption types mkIf mkMerge;
+  inherit (config) defaultEffectSystem;
 
   fileSpec = with types;
     submodule ({ config, options, ... }: {
@@ -40,18 +41,22 @@ let
         _out = mkOption {
           readOnly = true;
           internal = true;
-          default = if options.path.isDefined
+          default =
+            if options.path.isDefined
             then
-              # Assume single, but check first
+            # Assume single, but check first
               lib.throwIf (options.paths.isDefined) "${options.path} and ${options.paths} are mutually exclusive"
-              lib.throwIf (options.archiver.isDefined) "${options.path} and ${options.archiver} are mutually exclusive"
-              { inherit (config) label path; }
+                lib.throwIf
+                (options.archiver.isDefined) "${options.path} and ${options.archiver} are mutually exclusive"
+                { inherit (config) label path; }
             else
               { inherit (config) label paths archiver; };
         };
       };
     });
-
+  cfg = config.hercules-ci.github-releases;
+  opt = options.hercules-ci.github-releases;
+  enable = cfg.files != [ ] || opt.filesPerSystem.isDefined;
 in
 {
   options =
@@ -89,7 +94,7 @@ in
             
             In case of archive, `paths` may contain directories: their _contents_ will be archived recursively.
           '';
-          default = [];
+          default = [ ];
           defaultText = lib.literalExpression "[]";
           example = lib.literalExpression ''
             [
@@ -153,30 +158,29 @@ in
           default = "default";
           defaultText = lib.literalExpression "default";
         };
+        finalFiles =
+          let
+            releaseSystems = if cfg.systems == null then config.ciSystems else cfg.systems;
+            systemFiles =
+              lib.optionals (opt.filesPerSystem.isDefined) (
+                lib.concatMap
+                  (system: withSystem system cfg.filesPerSystem)
+                  releaseSystems
+              );
+            files = map (v: v._out) (cfg.files ++ systemFiles);
+          in
+          mkOption {
+            readOnly = true;
+            default = files;
+          };
       };
     };
 
   config =
-    let
-      inherit (lib) mkIf mkMerge;
-      inherit (config) defaultEffectSystem;
-
-      cfg = config.hercules-ci.github-releases;
-      opt = options.hercules-ci.github-releases;
-      enable = cfg.files != [] || opt.filesPerSystem.isDefined;
-    in
     {
       herculesCI = mkIf enable (herculesCI@{ config, ... }:
         let
-          releaseSystems = if cfg.systems == null then config.ciSystems else cfg.systems;
-          systemFiles =
-            lib.optionals (opt.filesPerSystem.isDefined) (
-              lib.concatMap
-                (system: withSystem system cfg.filesPerSystem)
-                releaseSystems
-            );
-          files = map (v: v._out) (cfg.files ++ systemFiles);
-          filesJSON = builtins.toJSON files;
+          finalFilesJSON = builtins.toJSON cfg.finalFiles;
 
           artifacts-tool = pkgs: pkgs.callPackage ../../packages/artifacts-tool/package.nix { };
           deploy = withSystem defaultEffectSystem ({ hci-effects, pkgs, ... }:
@@ -193,13 +197,13 @@ in
               };
               effectScript = lib.getExe (artifacts-tool pkgs);
               env = {
-                files = filesJSON;
+                files = finalFilesJSON;
                 inherit (config.repo) owner;
                 repo = config.repo.name;
                 releaseTag = cfg.releaseTag herculesCI;
               };
               inputs = [ pkgs.zip ];
-              extraAttributes.files = files;
+              extraAttributes.files = cfg.finalFiles;
             }
           );
         in
@@ -215,9 +219,10 @@ in
               default.outputs.checks.release-artifacts = mkIf (cfg.checkArtifacts herculesCI) (withSystem defaultEffectSystem ({ pkgs, ... }:
                 pkgs.runCommandNoCCLocal
                   "artifacts-check"
-                  { files = filesJSON;
+                  {
+                    files = finalFilesJSON;
                     check_only = "";
-                    passthru.files = files;
+                    passthru.files = cfg.finalFiles;
                   }
                   (lib.getExe (artifacts-tool pkgs))));
             }
